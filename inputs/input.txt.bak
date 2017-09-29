@@ -1,0 +1,12 @@
+Enzyme:
+receptor.pdb
+Enzyme ligand:
+ligand.pdb
+Substrate directory:
+substrates
+Substrate residue numbers:
+448,459,470,481,492,503,514,525,536,547,558,569,580,591,602,613,624,635,646,657,668,679,690,701
+Total protein residues:
+445
+Residue Conversion Map:
+residue_conversion_map.txt
