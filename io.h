@@ -1,5 +1,6 @@
 #ifndef IO_H
 #define IO_H
+#include <iostream>
 #include <string>
 #include <fstream>      // std::ifstream
 #include <stdio.h>  /* defines FILENAME_MAX */

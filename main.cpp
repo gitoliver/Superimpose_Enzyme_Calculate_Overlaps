@@ -12,6 +12,7 @@
 #include <future>
 #include <sys/wait.h>
 #include "io.h"
+#include "residue_name_conversion_map.h"
 #include "/home/oliver/Programs/gems/gmml/includes/gmml.hpp"
 
 
@@ -24,9 +25,9 @@ typedef std::vector<MolecularModeling::Atom*> AtomVector;
 constexpr auto PI = 3.14159265358979323846;
 constexpr auto CSA = 36.31681103; // Carbon Surface Area for normalizing results to the area of a carbon atom. Can ask the question: How many C atom equivalents are inside the protein?
 
-MolecularModeling::Residue* find_residue_by_number(std::string residue_number, Assembly *assembly);
-MolecularModeling::Residue seek_alycone_residue_connected_to_residue_number(std::string residue_number, Assembly *assembly);
-void recursively_seek_alycone_residue(Atom *start_atom, Residue *aglycone, bool *found);
+Residue* find_residue_by_number(std::string residue_number, Assembly *assembly);
+Residue* seek_alycone_residue_connected_to_residue_number(std::string residue_number, Assembly *assembly);
+Residue* recursively_seek_alycone_residue(Atom *start_atom, bool *found);
 double CalculateAtomicOverlapsForAssemblyVector(Assembly *assemblyA, AssemblyVector assemblies);
 bool CheckIfProtein(std::string resname);
 double SuperimposeSnapshotsToEnzymeCalculatePercentTimeAccessible(Assembly *enzyme, Assembly *enzyme_ligand, AssemblyVector substrate_snapshots, std::string substrate_residue_number);
@@ -43,7 +44,7 @@ int main(int argc, char *argv[])
     // Reading input file                             //
     //************************************************//
 
-    std::string parameter_directory, enzyme_PDB, enzyme_ligand_PDB, substrate_directory, substrate_residue_numbers, total_protein_residues, residue_conversion_map;
+    std::string parameter_directory, enzyme_PDB, enzyme_ligand_PDB, substrate_directory, substrate_residue_numbers, residue_conversion_map;
     std::ifstream inf (working_Directory + "/inputs/" + "input.txt");
     if (!inf)
     {
@@ -64,11 +65,14 @@ int main(int argc, char *argv[])
             getline(inf, substrate_directory);
         if(strInput == "Substrate residue numbers:")
             getline(inf, substrate_residue_numbers);
-        if(strInput == "Total protein residues:")
-            getline(inf, total_protein_residues);
         if(strInput == "Residue Conversion Map:")
             getline(inf, residue_conversion_map);
     }
+
+    // Map to convert from NLN residue numbers in input file to HXB2 numbering via user provided map.
+    std::string map_input_file = (working_Directory + "/inputs/" + residue_conversion_map);
+    Residue_Name_Conversion_Map conversion_map(map_input_file);
+    conversion_map.PrintMap();
 
     if (fileExists(parameter_directory + "/amino12.lib"))
         std::cout << "Using user provided parameters" << std::endl;
@@ -106,6 +110,8 @@ int main(int argc, char *argv[])
     Assembly enzyme;
     enzyme.BuildAssemblyFromPdbFile( (working_Directory + "/inputs/" + enzyme_PDB), amino_libs, glycam_libs, other_libs, prep, parameter_file_path );
     enzyme.BuildStructureByDistance();
+    AtomVector neighbors =enzyme.GetAllAtomsOfAssembly().at(0)->GetNode()->GetNodeNeighbors();
+    std::cout << "Number of neighbors is " << neighbors.size() << std::endl;
 
     //AtomVector test = enzyme.Select(":#4");
     //std::cout << "Selected " << test.at(0)->GetResidue()->GetId() << std::endl;
@@ -148,41 +154,6 @@ int main(int argc, char *argv[])
     closedir( dp );
 
 
-    // could not parallelize this secion with async, plus I found it was not required unless writing out a PDB from the assembly.
-  /*  for(AssemblyVector::iterator it = substrate_snapshots.begin(); it != substrate_snapshots.end(); ++it)
-    {
-        Assembly *assembly = *it;
-        //auto f = std::async(&Assembly::BuildStructureByDistance, &(*assembly));
-
-
-        //cap.pr is an incomplete member function call expression. You must follow it with parentheses containing the appropriate function arguments to make a valid C++ expression.
-
-       // You can't therefore pass cap.pr to std::async or any other function.
-
-       // To pass a member function to std::async you need to use the syntax you found:
-
-      //  auto f=std::async(&capc::pr,cap);
-       // Though in this case, you need to be aware that the cap object is copied. You could also use
-
-       // auto f=std::async(&capc::pr,&cap);
-       // to just pass a pointer to cap.
-
-      //  If the pointer-to-member-function syntax is unwelcome then you can use a lambda:
-
-       // auto f=std::async([&]{cap.pr();});
-
-      //  auto theasync = std::async([&]{ assembly->BuildStructureByDistance();});
-       // auto theasync = std::async([&p,i]{ return p.sum(i);});
-
-
-               //    auto f = std::async(&Person::sum, &p, xxx);
-
-                //   where p is a Person instance and xxx is an int
-
-        //assembly->BuildStructureByDistance();
-
-    }
-    */
     //************************************************//
     // Superimposition                                //
     //************************************************//
@@ -201,13 +172,20 @@ int main(int argc, char *argv[])
     }
     */
 
-    //Split out input residue numbers
+
+    std::string converted_resnum;
+    substrate_snapshots.at(0)->BuildStructureByDistance();
+
     StringVector split_substrate_residue_numbers = split(substrate_residue_numbers, ',');
     for(StringVector::iterator it = split_substrate_residue_numbers.begin(); it != split_substrate_residue_numbers.end(); ++it)
     {
        // std::cout << "id is " << *it << std::endl;
+
         double percent_accessible = SuperimposeSnapshotsToEnzymeCalculatePercentTimeAccessible(&enzyme, &enzyme_ligand, substrate_snapshots, *it);
-        std::cout << "Time accessible for " << *it << ": " <<  percent_accessible << std::endl;
+
+        Residue* algycone = seek_alycone_residue_connected_to_residue_number(*it, substrate_snapshots.at(0));
+        converted_resnum = conversion_map.ConvertViaMap(algycone->GetNumber());
+        std::cout << "Time accessible for " << converted_resnum << ": " <<  percent_accessible << std::endl;
     }
 /*
    // int i=0; //counter only for output pdb file names
@@ -297,11 +275,6 @@ double SuperimposeSnapshotsToEnzymeCalculatePercentTimeAccessible(Assembly *enzy
         }
     }
 
-
-    Residue temp = seek_alycone_residue_connected_to_residue_number("448", substrate_snapshots.at(0));
-    std::cout << "Alycone is " << temp.GetId() << std::endl;
-
-
     int snapshot_accessible_counter = 0;
 
     // This next part is for running on multiple CPUs
@@ -327,20 +300,21 @@ double SuperimposeSnapshotsToEnzymeCalculatePercentTimeAccessible(Assembly *enzy
             AtomVector substrate_all = substrate_snapshots.at(i)->GetAllAtomsOfAssembly();
             AtomVector substrate_protein = substrate_snapshots.at(i)->GetAllAtomsOfAssemblyWithinProteinResidues();
             //std::cout << "Substrate_protein.size " << substrate_protein.size() << std::endl;
-            //substrate_snapshots.at(i)->BuildStructureByDistance(4);
+           // substrate_snapshots.at(i)->BuildStructureByDistance(4);
             //substrate_snapshots.at(i)->BuildStructureByDistanceByOptimizedThread();
-            substrate_snapshots.at(i)->BuildStructure(gmml::DISTANCE);
+           // StringVector options = { "cutoff = 1.7",
+          //  substrate_snapshots.at(i)->BuildStructure(gmml::DISTANCE);
            // std::cout << "X value is then " << substrate_protein.at(0)->GetCoordinates().at(0)->GetX() << std::endl;
             gmml::Superimpose(super_atoms, target_atoms, substrate_all);
           //  std::cout << "X value is now " << substrate_protein.at(0)->GetCoordinates().at(0)->GetX() << std::endl;
           //  std::cout << "Original is now " << substrate_snapshots.at(i)->GetAllAtomsOfAssembly().at(0)->GetCoordinates().at(0)->GetX() << std::endl;
 
-            /*substrate_snapshots.at(i)->BuildStructureByDistance(4);
+            substrate_snapshots.at(i)->BuildStructureByDistance(4);
             std::stringstream ss;
-            ss << "outputs/moved_" << i << ".pdb";
+            ss << "outputs/moved_" << i << "_" << substrate_residue_number << ".pdb";
             PdbFileSpace::PdbFile *outputPdbFile = substrate_snapshots.at(i)->BuildPdbFileStructureFromAssembly(-1,0);
             outputPdbFile->Write(ss.str());
-           */
+
 
             double current_overlap = enzyme->CalculateAtomicOverlaps(substrate_protein);
             std::cout << "enzyme overlap with substrate is " << current_overlap << std::endl;
@@ -457,41 +431,42 @@ MolecularModeling::Residue* find_residue_by_number(std::string residue_number, A
 }
 
 
-MolecularModeling::Residue seek_alycone_residue_connected_to_residue_number(std::string residue_number, Assembly *assembly)
+MolecularModeling::Residue* seek_alycone_residue_connected_to_residue_number(std::string residue_number, Assembly *assembly)
 {
-    Residue *aglycone = new Residue();
     bool found = false;
     bool *pfound = &found;
     MolecularModeling::Residue *current_residue = find_residue_by_number(residue_number, assembly);
     Atom *start_atom = current_residue->GetAtoms().at(0); // Just get any atom to start from.
-    recursively_seek_alycone_residue(start_atom, aglycone, pfound);
+    Residue *aglycone = recursively_seek_alycone_residue(start_atom, pfound);
+    //std::cout << "Out a bit with the aglycone: " << aglycone->GetId() << std::endl;
     return aglycone;
-
 }
 
-void recursively_seek_alycone_residue(Atom *start_atom, Residue *aglycone, bool *found)
+MolecularModeling::Residue* recursively_seek_alycone_residue(Atom *start_atom, bool *found)
 {
-    std::cout << "Checking neighbors of " << start_atom->GetId() << std::endl;
+    Residue *aglycone = new Residue();
+    start_atom->SetDescription("Visited"); // Hmm. Not sure this is a good idea, but it sure is handy.
+    //std::cout << "Checking neighbors of " << start_atom->GetId() << std::endl;
     AtomVector neighbors = start_atom->GetNode()->GetNodeNeighbors();
-    std::cout << "Number of neighbors is " << neighbors.size() << std::endl;
     for(AtomVector::iterator it = neighbors.begin(); it != neighbors.end(); ++it)
     {
-        std::cout << "Neighbor is " << (*it)->GetId() << std::endl;
-        Atom *neighbor = *it;
-        if(neighbor->GetResidue()->CheckIfProtein())
+        // If haven't found aglycone yet and haven't visited this neighbor already
+        if ( (*found == false) && ((*it)->GetDescription().compare("Visited")!=0) )
         {
-            aglycone = neighbor->GetResidue();
-            *found = true;
-        }
-        if(*found == false)
-        {
-            recursively_seek_alycone_residue(neighbor, aglycone, found);
+            Atom *neighbor = *it;
+            if(neighbor->GetResidue()->CheckIfProtein())
+            {
+                aglycone = neighbor->GetResidue();
+                *found = true;
+            }
+            else
+            {
+                aglycone = recursively_seek_alycone_residue(neighbor, found);
+            }
         }
     }
-    return;
+    return aglycone;
 }
-
-
 
 //double SuperimposeEnzymeCalculateOverlaps(Assembly *enzyme, AtomVector target_atoms, AtomVector alsoMoving_atoms, AtomVector substrate_superimposition_atoms)
 //{
