@@ -1,5 +1,5 @@
 Enzyme:
-receptor.pdb
+receptor_backbone.pdb
 Enzyme ligand:
 ligand.pdb
 Substrate directory:
